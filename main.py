@@ -60,6 +60,29 @@ from app_core import (
 )
 
 
+LANGUAGE_OPTIONS = {
+    "Auto detectar": None,
+    "Español": "es",
+    "Inglés": "en",
+    "Portugués": "pt",
+    "Francés": "fr",
+    "Alemán": "de",
+    "Italiano": "it",
+}
+
+MINUTE_LANGUAGE_OPTIONS = {
+    "Español": "es",
+    "Idioma de la transcripción": "source",
+    "Inglés": "en",
+    "Chino": "zh",
+    "Portugués": "pt",
+    "Francés": "fr",
+    "Alemán": "de",
+    "Italiano": "it",
+    "Todos: ES + EN + ZH + PT": "all",
+}
+
+
 def resource_path(relative: str) -> Path:
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
     return base / relative
@@ -203,6 +226,8 @@ class HelpDialog(QDialog):
             <ul>
               <li><b>large-v3</b>: maxima calidad, mayor consumo de VRAM.</li>
               <li><b>medium</b>: mas rapido y consume menos VRAM.</li>
+              <li><b>Idioma Auto detectar</b>: Whisper identifica el idioma por archivo.</li>
+              <li><b>Idioma de minuta</b>: puede generar la minuta en español, ingles, chino, portugues o varios idiomas.</li>
               <li><b>num_ctx=4096</b>: opcion mas estable para generar minutas.</li>
               <li>Para muchos archivos: use primero <b>Solo transcripcion</b> y luego <b>Minuta desde TXT</b>.</li>
             </ul>
@@ -458,11 +483,18 @@ class MainWindow(QMainWindow):
         self.device_combo = QComboBox()
         self.device_combo.addItems(["Auto", "CUDA", "CPU"])
 
+        self.language_combo = QComboBox()
+        self.language_combo.addItems(list(LANGUAGE_OPTIONS.keys()))
+        self.language_combo.setCurrentText("Español")
+
         self.context_combo = QComboBox()
         self.context_combo.addItems(["4096", "8192"])
         self.fragment_combo = QComboBox()
         self.fragment_combo.addItems(["8000", "12000"])
         self.ollama_model = QLineEdit("qwen3:8b")
+        self.minute_language_combo = QComboBox()
+        self.minute_language_combo.addItems(list(MINUTE_LANGUAGE_OPTIONS.keys()))
+        self.minute_language_combo.setCurrentText("Español")
 
         self.out_times = QCheckBox("TXT con tiempos")
         self.out_clean = QCheckBox("TXT limpio")
@@ -479,12 +511,16 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.model_combo, 0, 1)
         layout.addWidget(QLabel("Dispositivo"), 0, 2)
         layout.addWidget(self.device_combo, 0, 3)
-        layout.addWidget(QLabel("Ollama modelo"), 1, 0)
-        layout.addWidget(self.ollama_model, 1, 1)
-        layout.addWidget(QLabel("Contexto"), 1, 2)
-        layout.addWidget(self.context_combo, 1, 3)
-        layout.addWidget(QLabel("Fragmento minuta"), 2, 0)
-        layout.addWidget(self.fragment_combo, 2, 1)
+        layout.addWidget(QLabel("Idioma"), 1, 0)
+        layout.addWidget(self.language_combo, 1, 1)
+        layout.addWidget(QLabel("Ollama modelo"), 1, 2)
+        layout.addWidget(self.ollama_model, 1, 3)
+        layout.addWidget(QLabel("Idioma minuta"), 2, 0)
+        layout.addWidget(self.minute_language_combo, 2, 1)
+        layout.addWidget(QLabel("Contexto"), 2, 2)
+        layout.addWidget(self.context_combo, 2, 3)
+        layout.addWidget(QLabel("Fragmento minuta"), 3, 0)
+        layout.addWidget(self.fragment_combo, 3, 1)
 
         checks = QGridLayout()
         checks.addWidget(self.out_times, 0, 0)
@@ -494,7 +530,7 @@ class MainWindow(QMainWindow):
         checks.addWidget(self.out_minute_docx, 2, 0)
         checks.addWidget(self.overwrite_outputs, 2, 1)
         checks.addWidget(self.release_whisper, 3, 0, 1, 2)
-        layout.addLayout(checks, 3, 0, 1, 4)
+        layout.addLayout(checks, 4, 0, 1, 4)
         return box
 
     def build_system_section(self) -> QWidget:
@@ -708,11 +744,13 @@ class MainWindow(QMainWindow):
         fragment = int(self.fragment_combo.currentText())
         return AppConfig(
             whisper_model_name=self.model_combo.currentText(),
+            language=LANGUAGE_OPTIONS.get(self.language_combo.currentText(), "es"),
             device_mode=self.device_combo.currentText().lower(),
             beam_size=self.beam_size,
             vad_filter=self.vad_filter,
             cpu_threads=self.cpu_threads,
             ollama_model=self.ollama_model.text().strip() or "qwen3:8b",
+            idioma_salida_minuta=MINUTE_LANGUAGE_OPTIONS.get(self.minute_language_combo.currentText(), "es"),
             ollama_url=self.ollama_url,
             ollama_tags_url=self.ollama_tags_url,
             ollama_timeout=self.ollama_timeout,

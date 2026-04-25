@@ -3,33 +3,13 @@
 **Gamboa Desarrollos - Transcriptor Local y Minutador** es una aplicacion de escritorio para Windows que transcribe audios y videos en español usando modelos locales con `faster-whisper` y, opcionalmente, genera minutas/resumenes con Ollama local.
 
 La transcripcion y la generacion de minutas se realizan localmente en el equipo del usuario.
-## Descargar para Windows
-
-La forma recomendada de usar **Gamboa Transcriptor** es descargar el instalador desde la sección de versiones del proyecto.
-
-### Última versión
-
-[Descargar instalador para Windows](https://github.com/TU_USUARIO/TU_REPO/releases/latest/download/GamboaTranscriptor_Setup.exe)
-
-También puede ver todas las versiones disponibles aquí:
-
-[Ver versiones publicadas](https://github.com/TU_USUARIO/TU_REPO/releases/latest)
-
-### Nota importante
-
-El instalador no incluye los modelos de Whisper ni los modelos de Ollama.
-
-Para generar minutas, instale Ollama y descargue el modelo recomendado:
-
-```bat
-ollama pull qwen3:8b
-```
 
 ## Funciones principales
 
 - Transcripcion local de audio y video.
 - Uso de GPU CUDA cuando esta disponible.
 - Respaldo automatico en CPU/int8 si CUDA falla.
+- Deteccion automatica de idioma por archivo con faster-whisper.
 - Generacion opcional de minuta con Ollama local.
 - Procesamiento de archivo individual o carpeta completa.
 - Modo separado para generar minuta desde TXT existente.
@@ -135,6 +115,8 @@ conda install -c conda-forge ffmpeg
 3. Seleccione archivo, carpeta o TXT.
 4. Elija carpeta de salida automatica o una carpeta personalizada.
 5. Ajuste modelo Whisper, dispositivo, salidas y opciones de Ollama.
+   - En **Idioma** puede elegir `Español` o `Auto detectar`.
+   - En **Idioma minuta** puede elegir el idioma de salida: español, idioma de la transcripcion, ingles, chino, portugues u opcion multidioma.
 6. Presione **INICIAR PROCESO**.
 
 ## Estructura de salida
@@ -150,8 +132,12 @@ transcripciones/
     NombreArchivo.docx
     NombreArchivo_MINUTA.txt
     NombreArchivo_MINUTA.docx
+    NombreArchivo_MINUTA_es.txt
+    NombreArchivo_MINUTA_zh.docx
     NombreArchivo_log.txt
 ```
+
+Los archivos con sufijo de idioma aparecen cuando se elige salida multidioma para la minuta.
 
 Si la opcion de sobrescritura esta desactivada, se crean nombres alternativos:
 
@@ -285,6 +271,29 @@ Instale FFmpeg:
 ```bat
 conda install -c conda-forge ffmpeg
 ```
+
+### Deteccion de idioma
+
+Por defecto la aplicacion usa español para conservar el comportamiento original.
+Si elige **Auto detectar**, `faster-whisper` decide el idioma de cada archivo y lo registra en el panel de log y en el DOCX de transcripcion.
+
+### Idioma de salida de la minuta
+
+La transcripcion puede estar en un idioma y la minuta en otro. Por ejemplo:
+
+- Audio/transcripcion en chino.
+- Minuta en español.
+
+Tambien puede elegir salida multidioma. En ese caso se generan archivos separados:
+
+```text
+NombreArchivo_MINUTA_es.docx
+NombreArchivo_MINUTA_en.docx
+NombreArchivo_MINUTA_zh.docx
+NombreArchivo_MINUTA_pt.docx
+```
+
+La salida multidioma tarda mas porque Ollama genera una minuta por idioma.
 
 ### La app tarda mucho al abrir el .exe
 

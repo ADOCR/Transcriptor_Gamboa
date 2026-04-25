@@ -54,6 +54,19 @@ EXTENSIONES_VIDEO = {
 
 EXTENSIONES_COMPATIBLES = EXTENSIONES_AUDIO | EXTENSIONES_VIDEO
 
+IDIOMAS_MINUTA = {
+    "source": ("Idioma de la transcripcion", ""),
+    "es": ("Español", "es"),
+    "en": ("Ingles", "en"),
+    "zh": ("Chino", "zh"),
+    "pt": ("Portugues", "pt"),
+    "fr": ("Frances", "fr"),
+    "de": ("Aleman", "de"),
+    "it": ("Italiano", "it"),
+}
+
+TODOS_IDIOMAS_MINUTA = ["es", "en", "zh", "pt"]
+
 NOMBRES_RESERVADOS_WINDOWS = {
     "CON",
     "PRN",
@@ -80,7 +93,8 @@ class OutputOptions:
 @dataclass
 class AppConfig:
     whisper_model_name: str = "large-v3"
-    language: str = "es"
+    # Use None para que faster-whisper detecte el idioma automaticamente.
+    language: Optional[str] = "es"
     task: str = "transcribe"
     beam_size: int = 5
     vad_filter: bool = True
@@ -100,6 +114,7 @@ class AppConfig:
         default_factory=lambda: {"temperature": 0.1, "num_ctx": 4096}
     )
     tamano_fragmento_minuta: int = 8000
+    idioma_salida_minuta: str = "es"  # source, es, en, zh, pt, fr, de, it, all
 
     output_root: Optional[Path] = None
     usar_carpeta_automatica: bool = True
@@ -121,6 +136,10 @@ class ProcessResult:
     minuta_generada: bool = False
     dispositivo: Optional[str] = None
     compute_type: Optional[str] = None
+    idioma_configurado: Optional[str] = None
+    idioma_detectado: Optional[str] = None
+    probabilidad_idioma: Optional[float] = None
+    idiomas_minuta: List[str] = field(default_factory=list)
     elapsed_seconds: float = 0.0
 
 
@@ -204,6 +223,42 @@ def formato_srt(segundos: float) -> str:
     minutos, resto = divmod(resto, 60_000)
     segs, ms = divmod(resto, 1000)
     return f"{horas:02d}:{minutos:02d}:{segs:02d},{ms:03d}"
+
+
+def etiqueta_idioma_configurado(language: Optional[str]) -> str:
+    if language is None:
+        return "Auto detectar"
+    etiquetas = {
+        "es": "es - Español",
+        "en": "en - Ingles",
+        "pt": "pt - Portugues",
+        "fr": "fr - Frances",
+        "de": "de - Aleman",
+        "it": "it - Italiano",
+    }
+    return etiquetas.get(language, language)
+
+
+def etiqueta_idioma_minuta(codigo: str) -> str:
+    return IDIOMAS_MINUTA.get(codigo, (codigo, codigo))[0]
+
+
+def sufijo_idioma_minuta(codigo: str) -> str:
+    if codigo == "source":
+        return ""
+    return IDIOMAS_MINUTA.get(codigo, (codigo, codigo))[1] or codigo
+
+
+def resolver_idiomas_minuta(config: AppConfig, idioma_detectado: Optional[str] = None) -> List[str]:
+    seleccionado = (config.idioma_salida_minuta or "es").lower()
+    if seleccionado == "all":
+        return TODOS_IDIOMAS_MINUTA.copy()
+    if seleccionado == "source":
+        detectado = (idioma_detectado or "").lower().strip()
+        if detectado:
+            return [detectado]
+        return ["source"]
+    return [seleccionado]
 
 
 def recolectar_archivos_compatibles(ruta: Union[str, Path]) -> List[Path]:
@@ -420,6 +475,9 @@ def guardar_docx_transcripcion(
     texto_limpio: str,
     ruta: Union[str, Path],
     modelo_whisper: str,
+    idioma_configurado: str,
+    idioma_detectado: str,
+    probabilidad_idioma: Optional[float],
     dispositivo_usado: str,
     compute_type_usado: str,
     sobrescribir: bool,
@@ -435,7 +493,9 @@ def guardar_docx_transcripcion(
         [
             ("Archivo fuente", archivo_fuente.name),
             ("Ruta fuente", str(archivo_fuente)),
-            ("Idioma configurado", "es"),
+            ("Idioma configurado", idioma_configurado),
+            ("Idioma detectado", idioma_detectado),
+            ("Probabilidad idioma", f"{probabilidad_idioma:.2%}" if probabilidad_idioma is not None else "No especificado"),
             ("Modelo Whisper usado", modelo_whisper),
             ("Dispositivo usado", dispositivo_usado),
             ("Tipo de calculo", compute_type_usado),
@@ -523,13 +583,27 @@ def dividir_texto_largo(texto: str, tamano: int) -> List[str]:
     return fragmentos
 
 
-def crear_prompt_resumen_fragmento(fragmento: str, i: int, total: int, nombre_fuente: str) -> str:
+def crear_prompt_resumen_fragmento(
+    fragmento: str,
+    i: int,
+    total: int,
+    nombre_fuente: str,
+    idioma_salida: str,
+) -> str:
+    etiqueta = etiqueta_idioma_minuta(idioma_salida)
+    instruccion_idioma = (
+        "Redacta la respuesta en el mismo idioma predominante de la transcripcion."
+        if idioma_salida == "source"
+        else f"Redacta la respuesta final en {etiqueta}."
+    )
     return f"""
 Eres un asistente local que prepara notas fieles para una minuta/resumen.
 Resume SOLO el contenido del fragmento indicado. No inventes nada.
 
 Archivo fuente: {nombre_fuente}
 Fragmento: {i} de {total}
+Idioma de salida: {etiqueta}
+{instruccion_idioma}
 
 {REGLAS_PROMPT}
 
@@ -553,13 +627,25 @@ Transcripcion del fragmento:
 """.strip()
 
 
-def crear_prompt_minuta_final(material: Union[str, Sequence[str]], nombre_fuente: str) -> str:
+def crear_prompt_minuta_final(
+    material: Union[str, Sequence[str]],
+    nombre_fuente: str,
+    idioma_salida: str,
+) -> str:
     material_texto = material if isinstance(material, str) else "\n\n".join(material)
+    etiqueta = etiqueta_idioma_minuta(idioma_salida)
+    instruccion_idioma = (
+        "Redacta toda la minuta en el mismo idioma predominante del material."
+        if idioma_salida == "source"
+        else f"Redacta TODA la minuta en {etiqueta}, incluyendo titulos, listas, tabla y nota de cautela."
+    )
     return f"""
 Eres un asistente local que redacta una minuta formal a partir de una transcripcion
 o de resumenes intermedios. Usa unicamente el material dado.
 
 Archivo fuente: {nombre_fuente}
+Idioma de salida: {etiqueta}
+{instruccion_idioma}
 
 {REGLAS_PROMPT}
 
@@ -608,6 +694,7 @@ def generar_minuta_de_texto(
     nombre_fuente: str,
     config: AppConfig,
     callbacks: ProcessCallbacks,
+    idioma_salida: str,
 ) -> str:
     fragmentos = dividir_texto_largo(texto_limpio, config.tamano_fragmento_minuta)
     if not fragmentos:
@@ -615,7 +702,7 @@ def generar_minuta_de_texto(
 
     if len(fragmentos) == 1:
         callbacks.file_progress(20)
-        minuta = llamar_a_ollama(crear_prompt_minuta_final(fragmentos[0], nombre_fuente), config)
+        minuta = llamar_a_ollama(crear_prompt_minuta_final(fragmentos[0], nombre_fuente, idioma_salida), config)
         callbacks.file_progress(95)
         return minuta
 
@@ -623,20 +710,39 @@ def generar_minuta_de_texto(
     for i, fragmento in enumerate(fragmentos, start=1):
         callbacks.status(f"Resumiendo fragmento {i} de {len(fragmentos)}...")
         callbacks.file_progress(int((i - 1) / len(fragmentos) * 70))
-        prompt = crear_prompt_resumen_fragmento(fragmento, i, len(fragmentos), nombre_fuente)
+        prompt = crear_prompt_resumen_fragmento(fragmento, i, len(fragmentos), nombre_fuente, idioma_salida)
         respuesta = llamar_a_ollama(prompt, config)
         resumenes.append(f"## Fragmento {i}\n{respuesta}")
 
     callbacks.status("Consolidando minuta final...")
     callbacks.file_progress(80)
-    minuta = llamar_a_ollama(crear_prompt_minuta_final(resumenes, nombre_fuente), config)
+    minuta = llamar_a_ollama(crear_prompt_minuta_final(resumenes, nombre_fuente, idioma_salida), config)
     callbacks.file_progress(95)
     return minuta
 
 
-def guardar_minuta_txt(minuta_markdown: str, carpeta: Path, base: str, sobrescribir: bool) -> Path:
+def nombre_base_minuta(base: str, idioma_salida: str = "source", incluir_sufijo: bool = False) -> str:
+    base = nombre_seguro(base)
+    if incluir_sufijo:
+        sufijo = sufijo_idioma_minuta(idioma_salida)
+        if sufijo:
+            return f"{base}_MINUTA_{sufijo}"
+    return f"{base}_MINUTA"
+
+
+def guardar_minuta_txt(
+    minuta_markdown: str,
+    carpeta: Path,
+    base: str,
+    sobrescribir: bool,
+    idioma_salida: str = "source",
+    incluir_sufijo: bool = False,
+) -> Path:
     carpeta.mkdir(parents=True, exist_ok=True)
-    ruta = ruta_salida_unica(carpeta / f"{nombre_seguro(base)}_MINUTA.txt", sobrescribir)
+    ruta = ruta_salida_unica(
+        carpeta / f"{nombre_base_minuta(base, idioma_salida, incluir_sufijo)}.txt",
+        sobrescribir,
+    )
     ruta.write_text(minuta_markdown.strip() + "\n", encoding="utf-8")
     return ruta
 
@@ -705,9 +811,19 @@ def _agregar_markdown_basico_a_docx(doc: Document, markdown: str) -> None:
         i += 1
 
 
-def guardar_minuta_docx(minuta_markdown: str, carpeta: Path, base: str, sobrescribir: bool) -> Path:
+def guardar_minuta_docx(
+    minuta_markdown: str,
+    carpeta: Path,
+    base: str,
+    sobrescribir: bool,
+    idioma_salida: str = "source",
+    incluir_sufijo: bool = False,
+) -> Path:
     carpeta.mkdir(parents=True, exist_ok=True)
-    ruta = ruta_salida_unica(carpeta / f"{nombre_seguro(base)}_MINUTA.docx", sobrescribir)
+    ruta = ruta_salida_unica(
+        carpeta / f"{nombre_base_minuta(base, idioma_salida, incluir_sufijo)}.docx",
+        sobrescribir,
+    )
     doc = Document()
     _agregar_markdown_basico_a_docx(doc, minuta_markdown)
     doc.save(ruta)
@@ -793,7 +909,7 @@ class GamboaProcessor:
                 self._log(f"No se pudo ejecutar limpieza CUDA agresiva: {exc}")
         self._log("Modelo Whisper liberado. En procesos largos puede ser necesario reiniciar la app para liberar toda la VRAM.")
 
-    def transcribir_archivo(self, archivo: Path) -> Tuple[List[Dict[str, Union[float, str]]], str]:
+    def transcribir_archivo(self, archivo: Path) -> Tuple[List[Dict[str, Union[float, str]]], str, object]:
         if self.model is None:
             self.cargar_modelo_whisper()
         assert self.model is not None
@@ -807,6 +923,13 @@ class GamboaProcessor:
             vad_filter=self.config.vad_filter,
         )
         duracion = float(getattr(info, "duration", 0.0) or 0.0)
+        idioma = getattr(info, "language", None) or "No especificado"
+        probabilidad = getattr(info, "language_probability", None)
+        if probabilidad is not None:
+            self._log(f"Idioma detectado por Whisper: {idioma} ({float(probabilidad):.2%})")
+        else:
+            self._log(f"Idioma detectado por Whisper: {idioma}")
+
         segmentos: List[Dict[str, Union[float, str]]] = []
         for segmento in segmentos_generador:
             texto = (segmento.text or "").strip()
@@ -819,7 +942,7 @@ class GamboaProcessor:
                 self.callbacks.file_progress(percent)
         self.callbacks.file_progress(100)
         texto_limpio = " ".join(str(s["text"]).strip() for s in segmentos).strip()
-        return segmentos, texto_limpio
+        return segmentos, texto_limpio, info
 
     def _guardar_log_archivo(self, carpeta: Path, base: str, lineas: Sequence[str]) -> Optional[Path]:
         try:
@@ -846,12 +969,18 @@ class GamboaProcessor:
             output_dir=str(carpeta),
             dispositivo=self.device_used,
             compute_type=self.compute_used,
+            idioma_configurado=etiqueta_idioma_configurado(self.config.language),
         )
         try:
             self.callbacks.current_file(str(archivo))
             self.callbacks.file_progress(0)
             local_log(f"Transcribiendo archivo: {archivo.name}")
-            segmentos, texto_limpio = self.transcribir_archivo(archivo)
+            segmentos, texto_limpio, info = self.transcribir_archivo(archivo)
+            idioma_detectado = getattr(info, "language", None) or "No especificado"
+            probabilidad = getattr(info, "language_probability", None)
+            probabilidad_float = float(probabilidad) if probabilidad is not None else None
+            result.idioma_detectado = idioma_detectado
+            result.probabilidad_idioma = probabilidad_float
 
             opts = self.config.output_options
             outputs: Dict[str, str] = {}
@@ -885,6 +1014,9 @@ class GamboaProcessor:
                     texto_limpio,
                     carpeta / f"{base}.docx",
                     self.config.whisper_model_name,
+                    etiqueta_idioma_configurado(self.config.language),
+                    idioma_detectado,
+                    probabilidad_float,
                     self.device_used or "No especificado",
                     self.compute_used or "No especificado",
                     self.config.sobrescribir_salidas,
@@ -927,12 +1059,34 @@ class GamboaProcessor:
             else:
                 texto = result.outputs.get("_texto_limpio_memoria", "")
 
-            minuta = generar_minuta_de_texto(texto, archivo.name, self.config, self.callbacks)
-            ruta_txt = guardar_minuta_txt(minuta, carpeta, base, self.config.sobrescribir_salidas)
-            result.outputs["minuta_txt"] = str(ruta_txt)
-            if self.config.output_options.docx_minuta:
-                ruta_docx = guardar_minuta_docx(minuta, carpeta, base, self.config.sobrescribir_salidas)
-                result.outputs["minuta_docx"] = str(ruta_docx)
+            idiomas = resolver_idiomas_minuta(self.config, result.idioma_detectado)
+            multi_idioma = len(idiomas) > 1
+            for idioma in idiomas:
+                etiqueta = etiqueta_idioma_minuta(idioma)
+                self.callbacks.status(f"Generando minuta en {etiqueta}...")
+                self._log(f"Generando minuta en {etiqueta} para: {archivo.name}")
+                minuta = generar_minuta_de_texto(texto, archivo.name, self.config, self.callbacks, idioma)
+                ruta_txt = guardar_minuta_txt(
+                    minuta,
+                    carpeta,
+                    base,
+                    self.config.sobrescribir_salidas,
+                    idioma_salida=idioma,
+                    incluir_sufijo=multi_idioma,
+                )
+                key_suffix = sufijo_idioma_minuta(idioma) if multi_idioma else ""
+                result.outputs[f"minuta_txt{('_' + key_suffix) if key_suffix else ''}"] = str(ruta_txt)
+                if self.config.output_options.docx_minuta:
+                    ruta_docx = guardar_minuta_docx(
+                        minuta,
+                        carpeta,
+                        base,
+                        self.config.sobrescribir_salidas,
+                        idioma_salida=idioma,
+                        incluir_sufijo=multi_idioma,
+                    )
+                    result.outputs[f"minuta_docx{('_' + key_suffix) if key_suffix else ''}"] = str(ruta_docx)
+                result.idiomas_minuta.append(idioma)
             result.minuta_generada = True
             self.callbacks.file_progress(100)
             self._log(f"Minuta generada: {archivo.name}")
@@ -953,12 +1107,33 @@ class GamboaProcessor:
             self.callbacks.status("Leyendo TXT...")
             texto = txt_path.read_text(encoding="utf-8", errors="replace")
             self.callbacks.status("Generando minuta...")
-            minuta = generar_minuta_de_texto(texto, txt_path.name, self.config, self.callbacks)
-            ruta_txt = guardar_minuta_txt(minuta, carpeta, base, self.config.sobrescribir_salidas)
-            result.outputs["minuta_txt"] = str(ruta_txt)
-            if self.config.output_options.docx_minuta:
-                ruta_docx = guardar_minuta_docx(minuta, carpeta, base, self.config.sobrescribir_salidas)
-                result.outputs["minuta_docx"] = str(ruta_docx)
+            idiomas = resolver_idiomas_minuta(self.config, None)
+            multi_idioma = len(idiomas) > 1
+            for idioma in idiomas:
+                etiqueta = etiqueta_idioma_minuta(idioma)
+                self.callbacks.status(f"Generando minuta en {etiqueta}...")
+                minuta = generar_minuta_de_texto(texto, txt_path.name, self.config, self.callbacks, idioma)
+                ruta_txt = guardar_minuta_txt(
+                    minuta,
+                    carpeta,
+                    base,
+                    self.config.sobrescribir_salidas,
+                    idioma_salida=idioma,
+                    incluir_sufijo=multi_idioma,
+                )
+                key_suffix = sufijo_idioma_minuta(idioma) if multi_idioma else ""
+                result.outputs[f"minuta_txt{('_' + key_suffix) if key_suffix else ''}"] = str(ruta_txt)
+                if self.config.output_options.docx_minuta:
+                    ruta_docx = guardar_minuta_docx(
+                        minuta,
+                        carpeta,
+                        base,
+                        self.config.sobrescribir_salidas,
+                        idioma_salida=idioma,
+                        incluir_sufijo=multi_idioma,
+                    )
+                    result.outputs[f"minuta_docx{('_' + key_suffix) if key_suffix else ''}"] = str(ruta_docx)
+                result.idiomas_minuta.append(idioma)
             result.ok = True
             result.minuta_generada = True
             self._log(f"Minuta generada desde TXT: {txt_path.name}")
@@ -974,6 +1149,8 @@ class GamboaProcessor:
         start = time.time()
         results: List[ProcessResult] = []
         cancelled = False
+        idiomas_minuta_plan = resolver_idiomas_minuta(self.config, None)
+        unidades_minuta_por_archivo = max(1, len(idiomas_minuta_plan))
 
         if mode == "txt_to_minute":
             self._log("Verificando Ollama...")
@@ -982,11 +1159,11 @@ class GamboaProcessor:
             if not ollama["available"] or not ollama["model_installed"]:
                 raise RuntimeError(str(ollama["message"]))
 
-            total = len(inputs)
+            total = len(inputs) * unidades_minuta_por_archivo
             for i, txt in enumerate(inputs, start=1):
-                self.callbacks.general_progress(i - 1, total)
+                self.callbacks.general_progress((i - 1) * unidades_minuta_por_archivo, total)
                 results.append(self.generar_minuta_desde_txt(Path(txt)))
-                self.callbacks.general_progress(i, total)
+                self.callbacks.general_progress(i * unidades_minuta_por_archivo, total)
                 if self.callbacks.should_stop_after_current():
                     cancelled = True
                     break
@@ -1008,7 +1185,7 @@ class GamboaProcessor:
 
         self.cargar_modelo_whisper()
 
-        total_units = len(files) + (len(files) if mode == "transcribe_minute" else 0)
+        total_units = len(files) + (len(files) * unidades_minuta_por_archivo if mode == "transcribe_minute" else 0)
         done_units = 0
         for idx, archivo in enumerate(files, start=1):
             self.callbacks.status(f"Procesando archivo {idx} de {len(files)}")
@@ -1033,7 +1210,7 @@ class GamboaProcessor:
                 for result in results:
                     if result.ok:
                         self.generar_minuta_para_resultado(result)
-                    done_units += 1
+                    done_units += unidades_minuta_por_archivo
                     self.callbacks.general_progress(done_units, total_units)
                     if self.callbacks.should_stop_after_current():
                         cancelled = True
