@@ -3,6 +3,27 @@
 **Gamboa Desarrollos - Transcriptor Local y Minutador** es una aplicacion de escritorio para Windows que transcribe audios y videos en español usando modelos locales con `faster-whisper` y, opcionalmente, genera minutas/resumenes con Ollama local.
 
 La transcripcion y la generacion de minutas se realizan localmente en el equipo del usuario.
+## Descargar para Windows
+
+La forma recomendada de usar **Gamboa Transcriptor** es descargar el instalador desde la sección de versiones del proyecto.
+
+### Última versión
+
+[Descargar instalador para Windows](https://github.com/TU_USUARIO/TU_REPO/releases/latest/download/GamboaTranscriptor_Setup.exe)
+
+También puede ver todas las versiones disponibles aquí:
+
+[Ver versiones publicadas](https://github.com/TU_USUARIO/TU_REPO/releases/latest)
+
+### Nota importante
+
+El instalador no incluye los modelos de Whisper ni los modelos de Ollama.
+
+Para generar minutas, instale Ollama y descargue el modelo recomendado:
+
+```bat
+ollama pull qwen3:8b
+```
 
 ## Funciones principales
 
