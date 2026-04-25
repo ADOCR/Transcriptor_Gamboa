@@ -1,0 +1,12 @@
+name: gamboa-transcriptor
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pyside6>=6.7,<6.10
+  - pip
+  - pip:
+      - faster-whisper>=1.0
+      - python-docx>=1.1
+      - requests>=2.31
+      - pyinstaller>=6.0
