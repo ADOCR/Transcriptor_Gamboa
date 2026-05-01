@@ -680,7 +680,8 @@ Resumen breve de lo hablado.
 - ...
 
 ## Nota de cautela
-Esta minuta fue generada automáticamente a partir de una transcripción. Debe ser revisada antes de usarse como documento oficial.
+Esta minuta fue generada automáticamente a partir de una transcripción usando Transcriptor_Gamboa . Debe ser revisada antes de usarse como documento oficial
+https://github.com/ADOCR/Transcriptor_Gamboa.
 
 Material disponible:
 \"\"\"
